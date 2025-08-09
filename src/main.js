@@ -32,7 +32,7 @@ const game = new Game(ui);
 window.game = game;
 
 // Wire UI events
-const SETTINGS_KEY = 'collider:settings:v1';
+const SETTINGS_KEY = 'tunnelvision:settings:v1';
 
 const defaultSettings = {
     sensitivity: 1.0,
