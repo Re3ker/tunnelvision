@@ -1,3 +1,10 @@
+/**
+ * Input
+ *
+ * Handles two aiming modes:
+ * - Pointer lock (relative): accumulate movement deltas, consumed per frame
+ * - Absolute fallback: map screen position to a unit circle target
+ */
 export class Input {
     constructor(domElement) {
         this.dom = domElement;
@@ -26,18 +33,19 @@ export class Input {
         document.addEventListener('pointerlockchange', this._onLockChange);
     }
 
+    /** Handle both relative and absolute pointer motion. */
     _onPointerMove(e) {
         if (this.locked) {
             // Relative mode: scale deltas by sensitivity
-            const sx = 0.0018 * this.sensitivity;
-            const sy = 0.0018 * this.sensitivity * (this.invertY ? 1 : -1);
-            this.delta.x += (e.movementX || 0) * sx;
-            this.delta.y += (e.movementY || 0) * sy;
+            const scaleX = 0.0018 * this.sensitivity;
+            const scaleY = 0.0018 * this.sensitivity * (this.invertY ? 1 : -1);
+            this.delta.x += (e.movementX || 0) * scaleX;
+            this.delta.y += (e.movementY || 0) * scaleY;
 
             // Prevent a single large event from exploding movement
-            const clamp = (v, a) => Math.max(-a, Math.min(a, v));
-            this.delta.x = clamp(this.delta.x, 1.2);
-            this.delta.y = clamp(this.delta.y, 1.2);
+            const clampAbs = (v, a) => Math.max(-a, Math.min(a, v));
+            this.delta.x = clampAbs(this.delta.x, 1.2);
+            this.delta.y = clampAbs(this.delta.y, 1.2);
             return;
         }
 
@@ -52,10 +60,10 @@ export class Input {
         let ty = dy * this.sensitivity * (this.invertY ? 1 : -1);
 
         // Clamp to unit circle
-        const len = Math.hypot(tx, ty);
-        if (len > 1) {
-            tx /= len;
-            ty /= len;
+        const length = Math.hypot(tx, ty);
+        if (length > 1) {
+            tx /= length;
+            ty /= length;
         }
         this.target.x = tx;
         this.target.y = ty;

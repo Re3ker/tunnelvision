@@ -9,6 +9,10 @@ import { CollisionSystem } from '../systems/CollisionSystem.js';
 import { HUD } from '../ui/HUD.js';
 import { ColorCycle } from './ColorCycle.js';
 
+/**
+ * Main game orchestrator: constructs scene, player, tunnel, spawner, HUD,
+ * input and audio systems; owns the main loop and game state transitions.
+ */
 export class Game {
     constructor(ui) {
         this.ui = ui;
@@ -20,7 +24,7 @@ export class Game {
         this.scene = this.sceneMgr.scene;
         this.camera = this.sceneMgr.camera;
 
-        // Shared color cycle (tweak live: game.color.hueStep = 0.03, etc.)
+        // Shared rainbow color cycle (used by tunnel rings and barrier colors)
         this.color = new ColorCycle({
             hue: 0.0,
             hueStep: 0.02,
@@ -50,11 +54,24 @@ export class Game {
         });
         this.scene.add(this.spawner.group);
 
-        // Woosh when a barrier passes the player
+        // Load SFX (and optionally music tracks you add)
+        this.audioReady = this.audio
+            .loadManifest({
+                woosh: 'assets/audio/woosh.wav',
+                coin: 'assets/audio/coin.wav',
+                crash: 'assets/audio/crash.wav',
+                // Add your music files here and call:
+                // game.audio.playMusic("music1", { loop: true })
+                music1: 'assets/audio/track1.wav',
+            })
+            .catch(() => {});
+
+        // Woosh SFX when a barrier passes the player
         this.spawner.setOnBarrierPass(() => {
             this.audio.playWoosh(this.worldSpeed);
         });
 
+        // Configure a slightly forgiving collision window to keep it fun
         this.collision = new CollisionSystem();
         this.collision.setForgiveness({
             zOffset: -0.6,
@@ -73,6 +90,7 @@ export class Game {
             },
         });
 
+        // FSM: 'menu' | 'running' | 'paused' | 'gameover'
         this.state = 'menu';
         this.resetProgress();
 
@@ -87,11 +105,13 @@ export class Game {
         this.toMenu();
     }
 
+    /** Toggle debug visibility on player collider and spawner visuals. */
     applyDebug() {
         this.player.debugMesh.visible = this._debug;
         this.spawner.setDebug(this._debug);
     }
 
+    /** Reset score/speed/counters and persistent best score. */
     resetProgress() {
         this.worldSpeed = 30;
         this.speedUpPerSec = 0.65;
@@ -113,6 +133,7 @@ export class Game {
         this.audio.setMute(m);
     }
 
+    /** Enter gameplay from menu, reset world and start music. */
     start() {
         this.state = 'running';
         this.ui.menu.classList.add('hidden');
@@ -128,12 +149,22 @@ export class Game {
 
         this.applyDebug();
         this.input.requestPointerLock();
+
+        // If you added a music track to the manifest, start it:
+        this.audioReady.then(() =>
+            this.audio.playMusic('music1', {
+                loop: true,
+                fadeIn: 0.6,
+                volume: 0.1, // kept for back-compat; use gain if you expose it
+            })
+        );
     }
 
     restart() {
         this.start();
     }
 
+    /** Resume from paused state and re-lock pointer. */
     resume() {
         if (this.state !== 'paused') return;
         this.state = 'running';
@@ -141,8 +172,10 @@ export class Game {
         this.ui.hud.classList.remove('hidden');
         this.applyDebug();
         this.input.requestPointerLock();
+        this.audio.resumeMusic();
     }
 
+    /** Return to main menu and stop music. */
     toMenu() {
         this.state = 'menu';
         this.ui.menu.classList.remove('hidden');
@@ -151,19 +184,23 @@ export class Game {
         this.ui.hud.classList.add('hidden');
         this.ui.reticle.style.display = 'none';
         this.input.exitPointerLock();
+        this.audio.stopMusic(0.3);
     }
 
+    /** Toggle between running and paused. */
     togglePause() {
         if (this.state === 'running') {
             this.state = 'paused';
             this.ui.pause.classList.remove('hidden');
             this.ui.hud.classList.add('hidden');
             this.input.exitPointerLock();
+            this.audio.pauseMusic(0.2);
         } else if (this.state === 'paused') {
             this.resume();
         }
     }
 
+    /** Enter gameover screen, persist best score, and play crash SFX. */
     gameOver() {
         this.state = 'gameover';
         this.ui.hud.classList.add('hidden');
@@ -176,16 +213,17 @@ export class Game {
         this.ui.bestScore.textContent = String(this.bestScore);
         this.audio.playCrash();
         this.input.exitPointerLock();
+        this.audio.pauseMusic(0.2);
     }
 
     onSceneResized() {}
 
     loop(now) {
-        const dt = Math.min((now - this.lastTime) / 1000, 1 / 20);
+        const deltaSeconds = Math.min((now - this.lastTime) / 1000, 1 / 20);
         this.lastTime = now;
 
         if (this.state === 'running') {
-            this.update(dt);
+            this.update(deltaSeconds);
             this.render();
         } else {
             this.render();
@@ -206,36 +244,34 @@ export class Game {
         });
 
         if (this.input.isLocked()) {
-            const d = this.input.consumeDelta();
-            this.player.updateRelative(d, dt);
+            const deltaMove = this.input.consumeDelta();
+            this.player.updateRelative(deltaMove, dt);
         } else {
-            const target = this.input.getTarget();
-            this.player.updateAbsolute(target, dt);
+            const aimTarget = this.input.getTarget();
+            this.player.updateAbsolute(aimTarget, dt);
         }
 
         this.tunnel.update(this.worldSpeed, dt);
         this.spawner.update(this.worldSpeed, dt);
 
-        const hit = this.collision.checkObstacles(
+        const collidedWithObstacle = this.collision.checkObstacles(
             this.spawner.obstacles,
             this.player
         );
-        if (hit) {
+        if (collidedWithObstacle) {
             this.gameOver();
             return;
         }
 
-        const got = this.collision.collectCoins(
+        const coinsCollected = this.collision.collectCoins(
             this.spawner.coins,
             this.player
         );
-        if (got > 0) {
-            this.coins += got;
-            this.score += got * 25;
+        if (coinsCollected > 0) {
+            this.coins += coinsCollected;
+            this.score += coinsCollected * 25;
             this.audio.playCoin();
         }
-
-        // No need to touch spawner.setDifficulty here (constant spacing).
     }
 
     render() {

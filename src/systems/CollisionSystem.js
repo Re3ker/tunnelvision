@@ -2,6 +2,16 @@ import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
 const _tmp = new THREE.Vector3();
 
+/**
+ * CollisionSystem
+ *
+ * Provides two queries:
+ * - checkObstacles: player vs. spinning disc barriers with circular holes
+ * - collectCoins: mark nearby coins as collected and return count
+ *
+ * Uses a forgiving z-window and shrinks the player radius slightly to keep
+ * gameplay fair. Public API is stable; names expanded for clarity only.
+ */
 export class CollisionSystem {
     constructor() {
         // Center of the collision plane along z (negative = forward into tunnel)
@@ -17,6 +27,7 @@ export class CollisionSystem {
         this.coinZPadding = 1.2;
     }
 
+    /** Configure tolerance and offsets used during collision tests. */
     setForgiveness({ zOffset, zPadding, radiusFactor, coinZPadding } = {}) {
         if (typeof zOffset === 'number') this.zOffset = zOffset;
         if (typeof zPadding === 'number') this.zPadding = zPadding;
@@ -26,6 +37,7 @@ export class CollisionSystem {
     }
 
     // Player vs. disc barriers with circular holes
+    /** Return true if player collides with any barrier disc. */
     checkObstacles(obstacles, player) {
         const rp = (player.radius || 0.35) * this.playerRadiusFactor;
 
@@ -40,10 +52,10 @@ export class CollisionSystem {
 
             // Rotate player position into obstacle's frame
             const ang = o.angle || 0;
-            const c = Math.cos(ang);
-            const s = Math.sin(ang);
-            const px = player.position.x * c + player.position.y * s;
-            const py = -player.position.x * s + player.position.y * c;
+            const cosA = Math.cos(ang);
+            const sinA = Math.sin(ang);
+            const px = player.position.x * cosA + player.position.y * sinA;
+            const py = -player.position.x * sinA + player.position.y * cosA;
 
             // If player's circle is fully inside any hole -> safe
             let insideHole = false;
@@ -57,8 +69,8 @@ export class CollisionSystem {
             if (insideHole) continue;
 
             // Otherwise, if inside solid disc -> collision
-            const rFromCenter = Math.hypot(px, py);
-            if (rFromCenter <= (o.R || 0) - rp) {
+            const radiusFromCenter = Math.hypot(px, py);
+            if (radiusFromCenter <= (o.R || 0) - rp) {
                 return true;
             }
         }
@@ -66,6 +78,7 @@ export class CollisionSystem {
         return false;
     }
 
+    /** Mark coins within pickup radius as collected; return the count. */
     collectCoins(coins, player) {
         let count = 0;
         for (const c of coins) {
@@ -78,9 +91,9 @@ export class CollisionSystem {
             c.mesh.getWorldPosition(_tmp);
             const dx = _tmp.x - player.position.x;
             const dy = _tmp.y - player.position.y;
-            const dist = Math.hypot(dx, dy);
+            const planarDistance = Math.hypot(dx, dy);
 
-            if (dist <= 0.45 + player.radius) {
+            if (planarDistance <= 0.45 + player.radius) {
                 c.collected = true;
                 count++;
             }

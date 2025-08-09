@@ -1,5 +1,6 @@
 import { Game } from './core/Game.js';
 
+// Cache UI elements we need to update or listen to
 const ui = {
     hud: document.getElementById('hud'),
     score: document.getElementById('score'),
@@ -22,6 +23,7 @@ const ui = {
     menuBtn: document.getElementById('menuBtn'),
 };
 
+// Create the game with references to the UI
 const game = new Game(ui);
 
 // Expose for toggling debug in console: game.debug = true/false

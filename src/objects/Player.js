@@ -1,5 +1,6 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
+/** Debug helper: draw a circle line for collision radius visualization. */
 function makeCircleLine(radius, color = 0x00ffff, segments = 96) {
     const positions = new Float32Array((segments + 1) * 3);
     for (let i = 0; i <= segments; i++) {
@@ -18,6 +19,13 @@ function makeCircleLine(radius, color = 0x00ffff, segments = 96) {
     return new THREE.LineLoop(geo, mat);
 }
 
+/**
+ * Player
+ *
+ * Represents the player cursor in the XY plane (at z=0). Movement is clamped
+ * to an allowed radius inside the tunnel. Includes a debug mesh to visualize
+ * the collision circle used by gameplay systems.
+ */
 export class Player {
     constructor({ radius = 8, margin = 1.2 } = {}) {
         this.allowedRadius = radius - margin;
@@ -52,18 +60,18 @@ export class Player {
 
     // Absolute mode: jump directly to target within allowed circle
     updateAbsolute(target) {
-        let tx = target.x * this.allowedRadius;
-        let ty = target.y * this.allowedRadius;
+        let targetX = target.x * this.allowedRadius;
+        let targetY = target.y * this.allowedRadius;
 
-        const len = Math.hypot(tx, ty);
-        if (len > this.allowedRadius) {
-            const k = this.allowedRadius / len;
-            tx *= k;
-            ty *= k;
+        const length = Math.hypot(targetX, targetY);
+        if (length > this.allowedRadius) {
+            const scale = this.allowedRadius / length;
+            targetX *= scale;
+            targetY *= scale;
         }
 
-        this.position.x = tx;
-        this.position.y = ty;
+        this.position.x = targetX;
+        this.position.y = targetY;
         this.debugMesh.position.copy(this.position);
     }
 
@@ -73,12 +81,12 @@ export class Player {
         this.position.y += delta.y * this.immediateGain;
 
         // Clamp to allowed circle
-        const r = Math.hypot(this.position.x, this.position.y);
-        const R = this.allowedRadius;
-        if (r > R) {
-            const k = R / r;
-            this.position.x *= k;
-            this.position.y *= k;
+        const radial = Math.hypot(this.position.x, this.position.y);
+        const maxRadius = this.allowedRadius;
+        if (radial > maxRadius) {
+            const scale = maxRadius / radial;
+            this.position.x *= scale;
+            this.position.y *= scale;
         }
 
         this.debugMesh.position.copy(this.position);

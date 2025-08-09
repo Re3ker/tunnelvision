@@ -1,9 +1,11 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
+/** Random float in [min, max). */
 function rand(min, max) {
     return min + Math.random() * (max - min);
 }
 
+/** Create an extruded disc mesh with circular holes. */
 function makeDiscMesh({ radius, depth = 1.8, holes, color }) {
     const shape = new THREE.Shape();
     shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
@@ -32,6 +34,7 @@ function makeDiscMesh({ radius, depth = 1.8, holes, color }) {
     return new THREE.Mesh(geom, mat);
 }
 
+/** Utility: thin circle line used for debug overlays. */
 function makeCircleLine(radius, color = 0x00ffff, segments = 96) {
     const positions = new Float32Array((segments + 1) * 3);
     for (let i = 0; i <= segments; i++) {
@@ -50,6 +53,7 @@ function makeCircleLine(radius, color = 0x00ffff, segments = 96) {
     return new THREE.LineLoop(geo, mat);
 }
 
+/** Logical + visual representation of a spinning barrier disc. */
 class BarrierDisc {
     constructor({
         radius,
@@ -67,6 +71,7 @@ class BarrierDisc {
         this.z = -200;
         this.angle = initialAngle;
         this.spin = spin;
+        // Tag that flips to true once the disc crosses z=0 for SFX trigger
         this.passedSound = false;
 
         this.mesh = makeDiscMesh({ radius, depth, holes, color });
@@ -102,6 +107,7 @@ class BarrierDisc {
     }
 }
 
+/** A spinning collectible coin that may be parented to a barrier. */
 class Coin {
     constructor({ x, y, z }) {
         this.type = 'coin';
@@ -126,7 +132,7 @@ class Coin {
         this.collected = false;
 
         this.parentBarrier = null;
-        this.localZ = 0;
+        this.localZ = 0; // local z relative to parent barrier when parented
 
         this.spinY = rand(4.5, 7.0) * (Math.random() < 0.5 ? -1 : 1);
         this.spinZ = rand(0.6, 1.6);
@@ -138,6 +144,14 @@ class Coin {
     }
 }
 
+/**
+ * Spawner
+ *
+ * Maintains a constant chain of equally-spaced barrier discs in the tunnel
+ * and populates coins inside barrier holes. The chain is rebuilt when any
+ * "ctrl" property changes or on reset. Update() advances items and prunes
+ * off-screen ones, then spawns new ones to keep a fixed count.
+ */
 export class Spawner {
     constructor({
         tunnelRadius,
@@ -183,6 +197,7 @@ export class Spawner {
         this._defineCtrlAccessors();
     }
 
+    /** Define reactive accessors for live tweaking via this.ctrl.* */
     _defineCtrlAccessors() {
         const clampSpacing = (v) =>
             Math.max(
@@ -228,7 +243,7 @@ export class Spawner {
             },
         });
 
-        // Initialize mirrors
+        // Initialize mirrors (trigger setters once to seed privates)
         this.ctrl.barrierZ = this.ctrl.barrierZ;
         this.ctrl.barrierSpacingZ = this.ctrl.barrierSpacingZ;
         this.ctrl.prefillCount = this.ctrl.prefillCount;
@@ -256,10 +271,14 @@ export class Spawner {
     setSpacing() {}
     setDifficulty() {}
 
+    /**
+     * Clear existing meshes and recreate a prefilled, evenly spaced chain.
+     */
     reset() {
         this._rebuildChain();
     }
 
+    /** Remove all current barriers/coins and prefill new ones. */
     _rebuildChain() {
         for (const o of this.obstacles) this.group.remove(o.mesh);
         for (const c of this.coins)
@@ -280,6 +299,7 @@ export class Spawner {
         this._needsRebuild = false;
     }
 
+    /** Advance positions, cull despawned items, and spawn new ones. */
     update(speed, dt) {
         if (this._needsRebuild || this.obstacles.length === 0) {
             this._rebuildChain();
@@ -302,6 +322,7 @@ export class Spawner {
             c.mesh.rotation.z += c.spinZ * dt;
         }
 
+        // Remove out-of-range obstacles and detach from scene
         this.obstacles = this.obstacles.filter((o) => {
             if (o.z > this.despawnZ) {
                 this.group.remove(o.mesh);
@@ -309,6 +330,7 @@ export class Spawner {
             }
             return true;
         });
+        // Remove collected or out-of-range coins and detach
         this.coins = this.coins.filter((c) => {
             const zw = c.parentBarrier ? c.parentBarrier.z : c.z;
             if (zw > this.despawnZ || c.collected) {
@@ -335,6 +357,7 @@ export class Spawner {
         }
     }
 
+    /** Create one barrier mesh + its coins and attach them to the scene. */
     _spawnBarrierAt(z, colorHex) {
         const R = this.tunnelRadius;
         const depth = this.barrierDepth;
@@ -411,7 +434,7 @@ export class Spawner {
         this.obstacles.push(o);
         this.group.add(o.mesh);
 
-        // Coins in holes
+        // Coins in holes: parent to the barrier so they ride along
         for (const h of holes) {
             const coin = new Coin({ x: h.x, y: h.y, z: 0 });
             o.mesh.add(coin.mesh);

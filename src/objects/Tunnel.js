@@ -1,6 +1,11 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { ColorCycle } from '../core/ColorCycle.js';
 
+/**
+ * Decorative tunnel: a set of wireframe cylinder segments and glowing rings
+ * that scroll towards the camera, with ring colors driven by a shared
+ * ColorCycle. This is purely visual and doesn't affect gameplay physics.
+ */
 export class Tunnel {
     constructor({
         radius = 8,
@@ -71,8 +76,8 @@ export class Tunnel {
         );
 
         this.rings = [];
-        const count = 20;
-        for (let i = 0; i < count; i++) {
+        const ringCount = 20;
+        for (let i = 0; i < ringCount; i++) {
             // Sample initial colors without mutating the shared hue
             const hex = this.colorCycle.sampleHex(i);
             const mat = new THREE.MeshBasicMaterial({
@@ -103,6 +108,7 @@ export class Tunnel {
         this._time = 0;
     }
 
+    /** Scroll segments/rings forward and recycle them to the back. */
     update(speed, dt) {
         this._time += dt;
         const segLen = this.segmentLength;
@@ -129,8 +135,8 @@ export class Tunnel {
                 r.material.color.setHex(nextHex);
             }
             // Slight opacity pulse
-            const base = 0.28 + 0.07 * Math.sin(this._time * 3.0);
-            r.material.opacity = base;
+            const opacityBase = 0.28 + 0.07 * Math.sin(this._time * 3.0);
+            r.material.opacity = opacityBase;
         }
     }
 }
