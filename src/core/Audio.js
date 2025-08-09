@@ -21,6 +21,9 @@ export class AudioSystem {
         this.musicGain = null;
         this.sfxGain = null;
 
+        // Master dynamics processor (acts as a transparent limiter)
+        this._limiter = null;
+
         // Global state
         this.muted = false;
         this.masterVolume = 0.9;
@@ -45,7 +48,18 @@ export class AudioSystem {
             // Buses
             this.master = this.ctx.createGain();
             this.master.gain.value = this.muted ? 0 : this.masterVolume;
-            this.master.connect(this.ctx.destination);
+
+            // Insert a light limiter on the master to avoid clipping when
+            // multiple SFX start simultaneously.
+            this._limiter = this.ctx.createDynamicsCompressor();
+            // Settings approximate a fast limiter; tweak to taste.
+            this._limiter.threshold.value = -3; // dB
+            this._limiter.knee.value = 2; // dB
+            this._limiter.ratio.value = 20; // :1
+            this._limiter.attack.value = 0.003; // seconds
+            this._limiter.release.value = 0.25; // seconds
+            this.master.connect(this._limiter);
+            this._limiter.connect(this.ctx.destination);
 
             this.musicGain = this.ctx.createGain();
             this.musicGain.gain.value = 1.0;
@@ -150,6 +164,7 @@ export class AudioSystem {
         }
 
         const gainNode = audioCtx.createGain();
+        // Start essentially silent to avoid clicks and let limiter adapt
         gainNode.gain.value = 0.0001;
 
         let currentNode = sourceNode;
@@ -231,7 +246,14 @@ export class AudioSystem {
         const decay = Math.max(0, opts.envelope?.decay ?? 0.01);
         const sustain = Math.max(0, Math.min(1, opts.envelope?.sustain ?? 1.0));
         const release = Math.max(0, opts.envelope?.release ?? 0.05);
-        const targetLevel = Math.max(0, opts.gain ?? 1.0);
+        // Loudness: prefer opts.volume (0..1), fallback to legacy opts.gain
+        const requestedLevel =
+            typeof opts.volume === 'number'
+                ? opts.volume
+                : typeof opts.gain === 'number'
+                ? opts.gain
+                : 1.0;
+        const targetLevel = Math.max(0, Math.min(1, requestedLevel));
 
         gainNode.gain.setValueAtTime(0.0001, when);
         gainNode.gain.linearRampToValueAtTime(targetLevel, when + attack);
@@ -246,6 +268,8 @@ export class AudioSystem {
                 ? Math.max(0, opts.duration)
                 : buffer.duration / (sourceNode.playbackRate?.value || 1);
 
+        // Optionally, a tiny bias could be added to when to help the limiter
+        // engage before the peak. Keeping behavior unchanged here.
         sourceNode.start(when, startOffset);
         const releaseAt = when + duration;
         gainNode.gain.setValueAtTime(targetLevel * sustain, releaseAt);
@@ -368,7 +392,14 @@ export class AudioSystem {
 
         const startAt = audioCtx.currentTime + (opts.when || 0);
         const fadeIn = Math.max(0, opts.fadeIn ?? 0.4);
-        const level = Math.max(0, opts.gain ?? 1.0);
+        // Loudness: prefer opts.volume (0..1), fallback to legacy opts.gain
+        const requestedLevel =
+            typeof opts.volume === 'number'
+                ? opts.volume
+                : typeof opts.gain === 'number'
+                ? opts.gain
+                : 1.0;
+        const level = Math.max(0, Math.min(1, requestedLevel));
 
         gainNode.gain.setValueAtTime(0.0001, startAt);
         gainNode.gain.exponentialRampToValueAtTime(level, startAt + fadeIn);
@@ -385,7 +416,8 @@ export class AudioSystem {
             offset,
             loop: sourceNode.loop,
             rate: sourceNode.playbackRate.value || 1,
-            opts: { ...opts, gain: level },
+            // Persist both volume and gain for maximum back-compat on resume
+            opts: { ...opts, volume: level, gain: level },
             playing: true,
         };
 
@@ -438,12 +470,6 @@ export class AudioSystem {
             bus: 'sfx',
             gain: 0.9,
             filters: [{ type: 'highpass', frequency: 800 }],
-            envelope: {
-                attack: 0.002,
-                decay: 0.02,
-                sustain: 0.9,
-                release: 0.06,
-            },
             reverb: { mix: 0.08 },
         });
     }

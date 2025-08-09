@@ -48,7 +48,7 @@ export class Game {
 
         this.spawner = new Spawner({
             tunnelRadius: 8,
-            startZ: -200,
+            startZ: -100,
             despawnZ: 6,
             colorCycle: this.color,
         });
@@ -150,7 +150,6 @@ export class Game {
         this.applyDebug();
         this.input.requestPointerLock();
 
-        // If you added a music track to the manifest, start it:
         this.audioReady.then(() =>
             this.audio.playMusic('music1', {
                 loop: true,
