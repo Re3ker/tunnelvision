@@ -12,11 +12,13 @@ export class Tunnel {
         segmentLength = 40,
         segments = 8,
         colorCycle = new ColorCycle(),
+        ringSpacing = 12,
     } = {}) {
         this.radius = radius;
         this.segmentLength = segmentLength;
         this.segments = segments;
         this.colorCycle = colorCycle;
+        this.ringSpacing = ringSpacing;
 
         this.group = new THREE.Group();
         this.group.matrixAutoUpdate = true;
@@ -34,24 +36,28 @@ export class Tunnel {
             this.radius,
             this.radius,
             this.segmentLength,
-            32,
-            4,
+            64, // smoother radial detail
+            1, // minimal height segments (we reuse geometry per segment)
             true
         );
         // Align cylinder along Z axis
         geom.rotateX(Math.PI / 2);
 
-        const mat = new THREE.MeshStandardMaterial({
-            color: 0x0f1320,
-            metalness: 0.1,
-            roughness: 0.8,
+        this.segMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff, // will be tinted by colorCycle in update()
+            metalness: 0.0,
+            roughness: 0.06,
             side: THREE.BackSide,
-            wireframe: true,
+            transparent: true,
+            opacity: 0.14,
+            transmission: 0.75, // glass-like
+            thickness: 0.25,
+            ior: 1.2,
         });
 
         this.segmentsList = [];
         for (let i = 0; i < this.segments; i++) {
-            const m = new THREE.Mesh(geom, mat);
+            const m = new THREE.Mesh(geom, this.segMaterial);
             m.position.z = -i * this.segmentLength;
             this.segGroup.add(m);
             this.segmentsList.push(m);
@@ -76,7 +82,7 @@ export class Tunnel {
         );
 
         this.rings = [];
-        const ringCount = 20;
+        const ringCount = 24;
         for (let i = 0; i < ringCount; i++) {
             // Sample initial colors without mutating the shared hue
             const hex = this.colorCycle.sampleHex(i);
@@ -87,9 +93,21 @@ export class Tunnel {
                 side: THREE.DoubleSide,
             });
 
-            const r = new THREE.Mesh(torusGeom, mat);
+            // Clone geometry so each ring can deform independently
+            const geom = torusGeom.clone();
+            // Snapshot base positions for deformation reference
+            const baseAttr = geom.attributes.position;
+            const baseArray = new Float32Array(baseAttr.array.length);
+            baseArray.set(baseAttr.array);
+
+            const r = new THREE.Mesh(geom, mat);
             r.quaternion.premultiply(qFaceForward);
-            r.position.z = -i * 10;
+            r.position.z = -i * this.ringSpacing;
+            // Per-ring deformation state
+            r.userData.basePositions = baseArray;
+            r.userData.jagSeed = Math.random() * 1000;
+            r.userData.jagPhase = Math.random() * Math.PI * 2;
+            r.userData.jagCurrent = 0; // smoothed amplitude
             ringGroup.add(r);
             this.rings.push(r);
         }
@@ -100,7 +118,7 @@ export class Tunnel {
             this.segmentsList[i].position.z = -i * this.segmentLength;
         }
         for (let i = 0; i < this.rings.length; i++) {
-            this.rings[i].position.z = -i * 10;
+            this.rings[i].position.z = -i * this.ringSpacing;
             // Re-apply sampled color in case hue changed before reset
             const hex = this.colorCycle.sampleHex(i);
             this.rings[i].material.color.setHex(hex);
@@ -109,34 +127,63 @@ export class Tunnel {
     }
 
     /** Scroll segments/rings forward and recycle them to the back. */
-    update(speed, dt) {
+    update(speed, dt, spectrum = null) {
         this._time += dt;
         const segLen = this.segmentLength;
 
+        // Move and recycle cylinder segments
         for (const m of this.segmentsList) {
             m.position.z += speed * dt;
             if (m.position.z > segLen / 2) {
-                let backmost =
+                const backmost =
                     Math.min(...this.segmentsList.map((s) => s.position.z)) -
                     segLen;
                 m.position.z = backmost;
             }
-            m.rotation.z += 0.05 * dt;
         }
 
-        for (const r of this.rings) {
+        // Rings (no audio reactivity)
+        const ringCount = this.rings.length;
+        for (let i = 0; i < ringCount; i++) {
+            const r = this.rings[i];
+
+            // Move and recycle ring
             r.position.z += speed * dt * 1.05;
             if (r.position.z > 2) {
-                // A ring "spawns" (wraps) -> advance the global hue
-                let backmost =
-                    Math.min(...this.rings.map((x) => x.position.z)) - 10;
+                const backmost =
+                    Math.min(...this.rings.map((x) => x.position.z)) -
+                    this.ringSpacing;
                 r.position.z = backmost;
                 const nextHex = this.colorCycle.advance();
                 r.material.color.setHex(nextHex);
             }
-            // Slight opacity pulse
-            const opacityBase = 0.28 + 0.07 * Math.sin(this._time * 3.0);
-            r.material.opacity = opacityBase;
+
+            // Constant opacity; no geometry deformation
+            r.material.opacity = 1;
+
+            // One-time restore to pristine geometry (in case it was deformed previously)
+            if (r.userData.basePositions && !r.userData._restored) {
+                const geom = r.geometry;
+                const posAttr = geom.attributes.position;
+                const base = r.userData.basePositions;
+                const count = posAttr.count;
+                for (let v = 0; v < count; v++) {
+                    posAttr.setXYZ(
+                        v,
+                        base[v * 3 + 0],
+                        base[v * 3 + 1],
+                        base[v * 3 + 2]
+                    );
+                }
+                posAttr.needsUpdate = true;
+                if (!geom.boundingSphere) geom.computeBoundingSphere();
+                r.userData._restored = true;
+            }
+        }
+
+        // Tint glass by current rainbow color (no emissive pulse)
+        if (this.segMaterial && this.colorCycle?.currentHex) {
+            this.segMaterial.color.setHex(this.colorCycle.currentHex());
         }
     }
 }

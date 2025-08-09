@@ -93,7 +93,8 @@ export class CollisionSystem {
             const dy = _tmp.y - player.position.y;
             const planarDistance = Math.hypot(dx, dy);
 
-            if (planarDistance <= 0.45 + player.radius) {
+            const coinR = c.pickupRadius != null ? c.pickupRadius : 0.45;
+            if (planarDistance <= coinR + player.radius) {
                 c.collected = true;
                 count++;
             }

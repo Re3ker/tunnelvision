@@ -23,15 +23,64 @@ function makeDiscMesh({ radius, depth = 1.8, holes, color }) {
     });
     geom.translate(0, 0, -depth / 2);
 
-    const mat = new THREE.MeshStandardMaterial({
+    // Premium body material with subtle glow
+    const bodyMat = new THREE.MeshPhysicalMaterial({
         color,
-        metalness: 0.25,
-        roughness: 0.6,
+        metalness: 0.9,
+        roughness: 0.35,
+        clearcoat: 0.35,
+        clearcoatRoughness: 0.12,
         side: THREE.DoubleSide,
-        emissive: new THREE.Color(color).multiplyScalar(0.15),
+        emissive: new THREE.Color(color).multiplyScalar(0.08),
+    });
+    const body = new THREE.Mesh(geom, bodyMat);
+
+    const group = new THREE.Group();
+    group.add(body);
+
+    // Accent glows: outer rim and hole edges
+    const base = new THREE.Color(color);
+    const glowColor = base.clone().lerp(new THREE.Color(0xffffff), 0.4);
+    const outerMat = new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
     });
 
-    return new THREE.Mesh(geom, mat);
+    // Outer rim (front and back)
+    const rimInner = radius * 0.965;
+    const rimOuter = radius * 1.01;
+    const rimGeom = new THREE.RingGeometry(rimInner, rimOuter, 96);
+    const rimFront = new THREE.Mesh(rimGeom, outerMat.clone());
+    rimFront.position.z = depth / 2 + 0.02;
+    rimFront.renderOrder = 10;
+    const rimBack = new THREE.Mesh(rimGeom, outerMat.clone());
+    rimBack.position.z = -depth / 2 - 0.02;
+    rimBack.renderOrder = 10;
+    rimBack.rotation.y = Math.PI;
+    group.add(rimFront, rimBack);
+
+    // Hole edge glows (front and back per hole)
+    const holeMat = outerMat.clone();
+    for (const h of holes) {
+        const edgeInner = Math.max(0, h.r * 0.98);
+        const edgeOuter = h.r * 1.08;
+        const hg = new THREE.RingGeometry(edgeInner, edgeOuter, 80);
+        const hf = new THREE.Mesh(hg, holeMat.clone());
+        hf.position.set(h.x, h.y, depth / 2 + 0.015);
+        hf.renderOrder = 10;
+        const hb = new THREE.Mesh(hg, holeMat.clone());
+        hb.position.set(h.x, h.y, -depth / 2 - 0.015);
+        hb.renderOrder = 10;
+        hb.rotation.y = Math.PI;
+        group.add(hf, hb);
+    }
+
+    return group;
 }
 
 /** Utility: thin circle line used for debug overlays. */
@@ -112,22 +161,119 @@ class Coin {
     constructor({ x, y, z }) {
         this.type = 'coin';
         this.z = z;
-
-        // Flat cylinder coin (faces XY plane)
-        const radius = 0.38;
+        // Elegant coin: larger radius, gold PBR, rim glint, and a star emblem
+        const baseRadius = 0.5;
+        const radius = baseRadius * 1.5; // +50%
         const height = 0.12;
-        const geom = new THREE.CylinderGeometry(radius, radius, height, 28, 1);
-        geom.rotateX(Math.PI / 2);
+        this.radius = radius;
+        this.pickupRadius = radius + 0.07; // keep generous pickup window relative to size
 
-        const mat = new THREE.MeshStandardMaterial({
-            color: 0xffd166,
-            metalness: 0.7,
-            roughness: 0.28,
+        // Main body
+        const bodyGeom = new THREE.CylinderGeometry(
+            radius,
+            radius,
+            height,
+            64,
+            1
+        );
+        bodyGeom.rotateX(Math.PI / 2);
+        const bodyMat = new THREE.MeshPhysicalMaterial({
+            color: 0xffd76a,
+            metalness: 0.8,
+            roughness: 0.16,
+            clearcoat: 0.6,
+            clearcoatRoughness: 0.08,
             emissive: 0x3a2a00,
-            emissiveIntensity: 0.35,
+            emissiveIntensity: 0.42,
         });
+        const body = new THREE.Mesh(bodyGeom, bodyMat);
 
-        this.mesh = new THREE.Mesh(geom, mat);
+        // Subtle rim glint on both faces
+        const rimOuter = radius * 1.02;
+        const rimInner = Math.max(0, radius * 0.94);
+        const rimGeom = new THREE.RingGeometry(rimInner, rimOuter, 64);
+        const rimMat = new THREE.MeshBasicMaterial({
+            color: 0xffffcc,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            depthTest: false,
+        });
+        const rimFront = new THREE.Mesh(rimGeom, rimMat.clone());
+        rimFront.position.z = height / 2 + 0.01;
+        rimFront.renderOrder = 10;
+        const rimBack = new THREE.Mesh(rimGeom, rimMat.clone());
+        rimBack.position.z = -height / 2 - 0.01;
+        rimBack.renderOrder = 10;
+        rimBack.rotation.y = Math.PI; // ensure correct facing
+
+        // Decorative inner ring groove on both faces
+        const decoOuter = radius * 0.82;
+        const decoInner = radius * 0.62;
+        const decoGeom = new THREE.RingGeometry(decoInner, decoOuter, 64);
+        const decoMat = new THREE.MeshStandardMaterial({
+            color: 0xf0c96a,
+            metalness: 0.9,
+            roughness: 0.28,
+            emissive: 0x241900,
+            emissiveIntensity: 0.3,
+        });
+        const decoFront = new THREE.Mesh(decoGeom, decoMat);
+        decoFront.position.z = height / 2 + 0.0015;
+        const decoBack = new THREE.Mesh(decoGeom, decoMat.clone());
+        decoBack.position.z = -height / 2 - 0.0015;
+        decoBack.rotation.y = Math.PI;
+
+        // Star emblem (five-point) extruded slightly, both faces
+        const starShape = (() => {
+            const s = new THREE.Shape();
+            const points = [];
+            const tips = 5;
+            const rOuter = radius * 0.32;
+            const rInner = radius * 0.13;
+            for (let i = 0; i < tips * 2; i++) {
+                const r = i % 2 === 0 ? rOuter : rInner;
+                const a = (i / (tips * 2)) * Math.PI * 2 - Math.PI / 2;
+                points.push(
+                    new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r)
+                );
+            }
+            s.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++)
+                s.lineTo(points[i].x, points[i].y);
+            s.closePath();
+            return s;
+        })();
+        const starGeom = new THREE.ExtrudeGeometry(starShape, {
+            depth: 0.02,
+            bevelEnabled: false,
+            curveSegments: 32,
+        });
+        const starMat = new THREE.MeshStandardMaterial({
+            color: 0xffdb74,
+            metalness: 0.95,
+            roughness: 0.24,
+            emissive: 0x3d2900,
+            emissiveIntensity: 0.3,
+        });
+        const starFront = new THREE.Mesh(starGeom, starMat);
+        starFront.position.z = height / 2 + 0.003;
+        const starBack = new THREE.Mesh(starGeom, starMat.clone());
+        starBack.position.z = -height / 2 - 0.003;
+        starBack.rotation.y = Math.PI;
+
+        // Assemble
+        this.mesh = new THREE.Group();
+        this.mesh.add(
+            body,
+            rimFront,
+            rimBack,
+            decoFront,
+            decoBack,
+            starFront,
+            starBack
+        );
         this.mesh.position.set(x, y, z);
         this.collected = false;
 
@@ -164,13 +310,11 @@ export class Spawner {
         this.despawnZ = despawnZ;
         this.colorCycle = colorCycle;
 
-        // Global controls (live via game.spawner.ctrl.*)
-        this.ctrl = {
-            barrierZ: startZ, // z of first barrier (negative = ahead)
-            barrierSpacingZ: 300, // EXACT constant spacing
-            prefillCount: 8, // number of live barriers
-            surfaceGapZ: 2,
-        };
+        // Simple, fixed controls for exact constant spacing
+        this.barrierZStart = startZ; // z of first barrier (negative = ahead)
+        this.barrierSpacingZ = 100; // exact constant spacing
+        this.prefillCount = 8; // number of live barriers to maintain
+        this.surfaceGapZ = 2; // reserved (kept for compatibility)
 
         // Hole tuning
         this.holeCfg = {
@@ -189,65 +333,9 @@ export class Spawner {
         this.obstacles = [];
         this.coins = [];
 
-        this._nextSpawnZ = this.ctrl.barrierZ;
         this.debug = false;
         this.onBarrierPass = null;
-
-        this._needsRebuild = true;
-        this._defineCtrlAccessors();
-    }
-
-    /** Define reactive accessors for live tweaking via this.ctrl.* */
-    _defineCtrlAccessors() {
-        const clampSpacing = (v) =>
-            Math.max(
-                this.barrierDepth + this.ctrl.surfaceGapZ + 0.01,
-                Number(v)
-            );
-        Object.defineProperties(this.ctrl, {
-            barrierZ: {
-                get: () => this._barrierZ ?? -200,
-                set: (v) => {
-                    this._barrierZ = Number(v);
-                    this._needsRebuild = true;
-                },
-                configurable: true,
-            },
-            barrierSpacingZ: {
-                get: () => this._barrierSpacingZ ?? 300,
-                set: (v) => {
-                    this._barrierSpacingZ = clampSpacing(v);
-                    this._needsRebuild = true;
-                },
-                configurable: true,
-            },
-            prefillCount: {
-                get: () => this._prefillCount ?? 8,
-                set: (v) => {
-                    this._prefillCount = Math.max(1, Number(v));
-                    this._needsRebuild = true;
-                },
-                configurable: true,
-            },
-            surfaceGapZ: {
-                get: () => this._surfaceGapZ ?? 2,
-                set: (v) => {
-                    this._surfaceGapZ = Math.max(0, Number(v));
-                    this._barrierSpacingZ = Math.max(
-                        this.barrierDepth + this._surfaceGapZ + 0.01,
-                        this._barrierSpacingZ ?? 300
-                    );
-                    this._needsRebuild = true;
-                },
-                configurable: true,
-            },
-        });
-
-        // Initialize mirrors (trigger setters once to seed privates)
-        this.ctrl.barrierZ = this.ctrl.barrierZ;
-        this.ctrl.barrierSpacingZ = this.ctrl.barrierSpacingZ;
-        this.ctrl.prefillCount = this.ctrl.prefillCount;
-        this.ctrl.surfaceGapZ = this.ctrl.surfaceGapZ;
+        // Build chain on first reset()
     }
 
     setOnBarrierPass(cb) {
@@ -256,7 +344,7 @@ export class Spawner {
 
     setHoleTuning(cfg = {}) {
         Object.assign(this.holeCfg, cfg);
-        this._needsRebuild = true;
+        this._rebuildChain();
     }
 
     setDebug(v) {
@@ -266,10 +354,34 @@ export class Spawner {
 
     // Back-compat stubs
     setSpawnDistances({ barrierZ } = {}) {
-        if (typeof barrierZ === 'number') this.ctrl.barrierZ = barrierZ;
+        if (typeof barrierZ === 'number') {
+            this.barrierZStart = barrierZ;
+            this._rebuildChain();
+        }
     }
     setSpacing() {}
     setDifficulty() {}
+
+    // Simple setters for clarity if needed externally
+    setBarrierSpacing(v) {
+        const minSpacing = this.barrierDepth + this.surfaceGapZ + 0.01;
+        this.barrierSpacingZ = Math.max(minSpacing, Number(v));
+        this._rebuildChain();
+    }
+    setPrefillCount(n) {
+        this.prefillCount = Math.max(1, Number(n));
+        this._rebuildChain();
+    }
+    setBarrierZStart(z) {
+        this.barrierZStart = Number(z);
+        this._rebuildChain();
+    }
+    setSurfaceGapZ(g) {
+        this.surfaceGapZ = Math.max(0, Number(g));
+        const minSpacing = this.barrierDepth + this.surfaceGapZ + 0.01;
+        this.barrierSpacingZ = Math.max(minSpacing, this.barrierSpacingZ);
+        this._rebuildChain();
+    }
 
     /**
      * Clear existing meshes and recreate a prefilled, evenly spaced chain.
@@ -286,24 +398,19 @@ export class Spawner {
         this.obstacles.length = 0;
         this.coins.length = 0;
 
-        this._nextSpawnZ = this.ctrl.barrierZ;
-
         // Prefill: use sampled hues so initial barriers aren't identical
-        for (let i = 0; i < this.ctrl.prefillCount; i++) {
+        for (let i = 0; i < this.prefillCount; i++) {
             const colorHex = this.colorCycle
                 ? this.colorCycle.sampleHex(i)
                 : 0xff334d;
-            this._spawnBarrierAt(this._nextSpawnZ, colorHex);
-            this._nextSpawnZ -= this.ctrl.barrierSpacingZ;
+            const z = this.barrierZStart - i * this.barrierSpacingZ;
+            this._spawnBarrierAt(z, colorHex);
         }
-        this._needsRebuild = false;
     }
 
     /** Advance positions, cull despawned items, and spawn new ones. */
     update(speed, dt) {
-        if (this._needsRebuild || this.obstacles.length === 0) {
-            this._rebuildChain();
-        }
+        if (this.obstacles.length === 0) this._rebuildChain();
 
         for (const o of this.obstacles) {
             const prevZ = o.z;
@@ -341,11 +448,9 @@ export class Spawner {
         });
 
         // Maintain constant-spacing chain
-        while (this.obstacles.length < this.ctrl.prefillCount) {
+        while (this.obstacles.length < this.prefillCount) {
             const last = this.obstacles[this.obstacles.length - 1];
-            const z = last
-                ? last.z - this.ctrl.barrierSpacingZ
-                : this.ctrl.barrierZ;
+            const z = last ? last.z - this.barrierSpacingZ : this.barrierZStart;
 
             // For runtime spawns, use current hue so barrier matches ring hue now
             const colorHex = this.colorCycle
@@ -353,7 +458,6 @@ export class Spawner {
                 : 0xff334d;
 
             this._spawnBarrierAt(z, colorHex);
-            this._nextSpawnZ = z - this.ctrl.barrierSpacingZ;
         }
     }
 

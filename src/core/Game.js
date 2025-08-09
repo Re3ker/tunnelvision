@@ -20,9 +20,17 @@ export class Game {
         this.input = new Input(this.sceneMgr.renderer.domElement);
         this.audio = new AudioSystem();
         this.hud = new HUD(ui);
+        // User volume settings (defaults)
+        this.musicVolume = 0.3;
+        this.sfxVolume = 0.3;
 
         this.scene = this.sceneMgr.scene;
         this.camera = this.sceneMgr.camera;
+
+        // Static radial gradient background (inner gray -> outer black)
+        this._bgTexture = null;
+        this._applyBackgroundGradient();
+        if (this.scene.fog) this.scene.fog.color.set(0x000000);
 
         // Shared rainbow color cycle (used by tunnel rings and barrier colors)
         this.color = new ColorCycle({
@@ -40,6 +48,8 @@ export class Game {
         });
         this.scene.add(this.tunnel.group);
 
+        // Removed the separate bars visualizer; tunnel rings will react to music instead
+
         this.player = new Player({
             radius: 8,
             margin: 1.2,
@@ -55,16 +65,34 @@ export class Game {
         this.scene.add(this.spawner.group);
 
         // Load SFX (and optionally music tracks you add)
+
+        this._lastTrack = null;
         this.audioReady = this.audio
             .loadManifest({
                 woosh: 'assets/audio/woosh.wav',
                 coin: 'assets/audio/coin.wav',
                 crash: 'assets/audio/crash.wav',
-                // Add your music files here and call:
-                // game.audio.playMusic("music1", { loop: true })
-                music1: 'assets/audio/track1.wav',
+                // Music tracks (playlist)
+                joyride: 'assets/audio/tracks/joyride.wav',
+                rubberband: 'assets/audio/tracks/rubberband.wav',
+                stingray: 'assets/audio/tracks/stingray.wav',
+                distance: 'assets/audio/tracks/distance.wav',
+                chaos: 'assets/audio/tracks/chaos.wav',
+                retro: 'assets/audio/tracks/retro.wav',
+                wego: 'assets/audio/tracks/wego.wav',
+                // Optional legacy track
             })
             .catch(() => {});
+
+        this.musicPlaylist = [
+            'joyride',
+            'rubberband',
+            'stingray',
+            'distance',
+            'chaos',
+            'retro',
+            'wego',
+        ];
 
         // Woosh SFX when a barrier passes the player
         this.spawner.setOnBarrierPass(() => {
@@ -113,13 +141,12 @@ export class Game {
 
     /** Reset score/speed/counters and persistent best score. */
     resetProgress() {
-        this.worldSpeed = 30;
-        this.speedUpPerSec = 0.65;
+        this.worldSpeed = 42;
+        this.speedUpPerSec = 1;
         this.score = 0;
         this.coins = 0;
         this.bestScore =
             parseInt(localStorage.getItem('bestScore') || '0', 10) || 0;
-        this.spawnBias = 1.0;
         this.distanceTravelled = 0;
     }
 
@@ -131,6 +158,18 @@ export class Game {
     }
     setMute(m) {
         this.audio.setMute(m);
+    }
+
+    // Volume controls wired from UI
+    setMusicVolume(v) {
+        const vol = Math.max(0, Math.min(1, v));
+        this.musicVolume = vol;
+        this.audio.setBusVolume('music', vol);
+    }
+    setSfxVolume(v) {
+        const vol = Math.max(0, Math.min(1, v));
+        this.sfxVolume = vol;
+        this.audio.setBusVolume('sfx', vol);
     }
 
     /** Enter gameplay from menu, reset world and start music. */
@@ -150,13 +189,18 @@ export class Game {
         this.applyDebug();
         this.input.requestPointerLock();
 
-        this.audioReady.then(() =>
-            this.audio.playMusic('music1', {
-                loop: true,
-                fadeIn: 0.6,
-                volume: 0.1, // kept for back-compat; use gain if you expose it
-            })
-        );
+        this.audioReady.then(() => {
+            // Apply current UI volumes to buses
+            this.audio.setBusVolume('music', this.musicVolume);
+            this.audio.setBusVolume('sfx', this.sfxVolume);
+            const track = this._pickRandomTrack();
+            if (track) {
+                this.audio.playMusic(track, {
+                    loop: true,
+                    fadeIn: 0.6,
+                });
+            }
+        });
     }
 
     restart() {
@@ -199,6 +243,24 @@ export class Game {
         }
     }
 
+    /** Pick a random music track name from the playlist, avoiding the last track if possible. */
+    _pickRandomTrack() {
+        if (
+            !Array.isArray(this.musicPlaylist) ||
+            this.musicPlaylist.length === 0
+        )
+            return null;
+        if (this.musicPlaylist.length === 1) return this.musicPlaylist[0];
+        // Filter out last track to avoid immediate repeats
+        const candidates = this.musicPlaylist.filter(
+            (t) => t !== this._lastTrack
+        );
+        const choice =
+            candidates[Math.floor(Math.random() * candidates.length)];
+        this._lastTrack = choice;
+        return choice;
+    }
+
     /** Enter gameover screen, persist best score, and play crash SFX. */
     gameOver() {
         this.state = 'gameover';
@@ -215,7 +277,36 @@ export class Game {
         this.audio.pauseMusic(0.2);
     }
 
-    onSceneResized() {}
+    onSceneResized() {
+        this._applyBackgroundGradient();
+    }
+
+    // Build a radial gradient texture and set as scene background
+    _applyBackgroundGradient() {
+        const size = new THREE.Vector2();
+        this.sceneMgr.renderer.getSize(size);
+        const w = Math.max(1, Math.floor(size.x));
+        const h = Math.max(1, Math.floor(size.y));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const cx = w / 2;
+        const cy = h / 2;
+        const r = Math.sqrt(cx * cx + cy * cy);
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        grad.addColorStop(0, '#222222'); // inner gray
+        grad.addColorStop(1, '#000000'); // outer black
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+        else if (THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
+        tex.needsUpdate = true;
+        this._bgTexture = tex;
+        this.scene.background = tex;
+    }
 
     loop(now) {
         const deltaSeconds = Math.min((now - this.lastTime) / 1000, 1 / 20);
@@ -250,8 +341,11 @@ export class Game {
             this.player.updateAbsolute(aimTarget, dt);
         }
 
-        this.tunnel.update(this.worldSpeed, dt);
+        const spectrum = this.audio.getMusicFrequencyData();
+        this.tunnel.update(this.worldSpeed, dt, spectrum);
         this.spawner.update(this.worldSpeed, dt);
+
+        // Background is a static gradient; no per-frame color updates
 
         const collidedWithObstacle = this.collision.checkObstacles(
             this.spawner.obstacles,

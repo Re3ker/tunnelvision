@@ -24,6 +24,11 @@ export class AudioSystem {
         // Master dynamics processor (acts as a transparent limiter)
         this._limiter = null;
 
+        // Music analysis nodes/buffers (for visuals)
+        this._musicAnalyser = null;
+        this._musicFreqData = null; // Uint8Array sized to analyser bins
+        this._musicLevel = 0; // smoothed 0..1 for quick consumers
+
         // Global state
         this.muted = false;
         this.masterVolume = 0.9;
@@ -62,11 +67,19 @@ export class AudioSystem {
             this._limiter.connect(this.ctx.destination);
 
             this.musicGain = this.ctx.createGain();
-            this.musicGain.gain.value = 1.0;
+            // Default music bus volume now comes from user settings; use 0.3 as baseline
+            this.musicGain.gain.value = 0.3;
             this.musicGain.connect(this.master);
 
+            // Tap the music bus with an analyser for visualization
+            this._musicAnalyser = this.ctx.createAnalyser();
+            this._musicAnalyser.fftSize = 512; // 256 bins
+            this._musicAnalyser.smoothingTimeConstant = 0.7;
+            this.musicGain.connect(this._musicAnalyser);
+
             this.sfxGain = this.ctx.createGain();
-            this.sfxGain.gain.value = 1.0;
+            // Default SFX bus volume comes from user settings; baseline 0.3
+            this.sfxGain.gain.value = 0.3;
             this.sfxGain.connect(this.master);
 
             // Shared reverb
@@ -241,19 +254,13 @@ export class AudioSystem {
 
         gainNode.connect(destinationBus);
 
-        // ADSR envelope
+        // ADSR envelope (per-call amplitude now normalized; overall volume is set by bus)
         const attack = Math.max(0, opts.envelope?.attack ?? 0.005);
         const decay = Math.max(0, opts.envelope?.decay ?? 0.01);
         const sustain = Math.max(0, Math.min(1, opts.envelope?.sustain ?? 1.0));
         const release = Math.max(0, opts.envelope?.release ?? 0.05);
-        // Loudness: prefer opts.volume (0..1), fallback to legacy opts.gain
-        const requestedLevel =
-            typeof opts.volume === 'number'
-                ? opts.volume
-                : typeof opts.gain === 'number'
-                ? opts.gain
-                : 1.0;
-        const targetLevel = Math.max(0, Math.min(1, requestedLevel));
+        // Per-call volume options are deprecated; use bus volumes instead
+        const targetLevel = 1.0;
 
         gainNode.gain.setValueAtTime(0.0001, when);
         gainNode.gain.linearRampToValueAtTime(targetLevel, when + attack);
@@ -392,14 +399,8 @@ export class AudioSystem {
 
         const startAt = audioCtx.currentTime + (opts.when || 0);
         const fadeIn = Math.max(0, opts.fadeIn ?? 0.4);
-        // Loudness: prefer opts.volume (0..1), fallback to legacy opts.gain
-        const requestedLevel =
-            typeof opts.volume === 'number'
-                ? opts.volume
-                : typeof opts.gain === 'number'
-                ? opts.gain
-                : 1.0;
-        const level = Math.max(0, Math.min(1, requestedLevel));
+        // Per-track volume is deprecated; use music bus volume instead
+        const level = 1.0;
 
         gainNode.gain.setValueAtTime(0.0001, startAt);
         gainNode.gain.exponentialRampToValueAtTime(level, startAt + fadeIn);
@@ -416,8 +417,8 @@ export class AudioSystem {
             offset,
             loop: sourceNode.loop,
             rate: sourceNode.playbackRate.value || 1,
-            // Persist both volume and gain for maximum back-compat on resume
-            opts: { ...opts, volume: level, gain: level },
+            // Persist opts for resume (volume is handled by bus now)
+            opts: { ...opts },
             playing: true,
         };
 
@@ -462,13 +463,44 @@ export class AudioSystem {
         this._music = null;
     }
 
+    // Analysis accessors -----------------------------------------------
+
+    /**
+     * Fill and return a Uint8Array of current music frequency magnitudes (0..255).
+     * Returns null if no analyser is available.
+     */
+    getMusicFrequencyData() {
+        const analyser = this._musicAnalyser;
+        if (!analyser) return null;
+        const binCount = analyser.frequencyBinCount;
+        if (!this._musicFreqData || this._musicFreqData.length !== binCount) {
+            this._musicFreqData = new Uint8Array(binCount);
+        }
+        analyser.getByteFrequencyData(this._musicFreqData);
+        return this._musicFreqData;
+    }
+
+    /**
+     * Return a smoothed average music level in 0..1.
+     */
+    getMusicLevel() {
+        const data = this.getMusicFrequencyData();
+        if (!data) return 0;
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        const avg = sum / (data.length * 255);
+        // Simple smoothing to reduce flicker
+        const smoothing = 0.85;
+        this._musicLevel = this._musicLevel * smoothing + avg * (1 - smoothing);
+        return this._musicLevel;
+    }
+
     // Convenience SFX ------------------------------------------------
 
     /** Play a short coin pickup sound. */
     playCoin() {
         return this.play('coin', {
             bus: 'sfx',
-            gain: 0.9,
             filters: [{ type: 'highpass', frequency: 800 }],
             reverb: { mix: 0.08 },
         });
@@ -478,7 +510,6 @@ export class AudioSystem {
     playCrash() {
         return this.play('crash', {
             bus: 'sfx',
-            gain: 0.9,
             reverb: { mix: 0.35, time: 2.8 },
         });
     }
@@ -489,7 +520,6 @@ export class AudioSystem {
         const rate = Math.min(2.2, 0.8 + speed / 140);
         return this.play('woosh', {
             bus: 'sfx',
-            gain: 0.6,
             playbackRate: rate,
             filters: [{ type: 'bandpass', frequency: 900 + speed * 8, Q: 0.9 }],
             reverb: { mix },
